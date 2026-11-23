@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>La Grandiella · Cocina 3D · IGR</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#3b3f45;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;color:#fff}
+  #c{position:fixed;inset:0;touch-action:none}
+  header{position:fixed;top:0;left:0;right:0;padding:10px 14px;display:flex;align-items:center;gap:10px;
+    background:linear-gradient(#000a,#0000);pointer-events:none}
+  header b{font-size:15px;letter-spacing:.2px}
+  header span{font-size:12px;opacity:.75}
+  nav{position:fixed;left:0;right:0;bottom:0;padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+    display:flex;gap:8px;overflow-x:auto;background:linear-gradient(#0000,#000b);scrollbar-width:none}
+  nav::-webkit-scrollbar{display:none}
+  nav button{flex:0 0 auto;border:0;border-radius:20px;padding:10px 14px;font-size:14px;font-weight:600;
+    background:#ffffff26;color:#fff;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+  nav button.on{background:#e30613}
+  #load{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#2c2f34;z-index:5}
+  #bar{width:220px;height:6px;border-radius:3px;background:#ffffff22;overflow:hidden}
+  #bar i{display:block;height:100%;width:0;background:#e30613;transition:width .2s}
+  #hint{position:fixed;top:44px;left:0;right:0;text-align:center;font-size:12px;opacity:.7;pointer-events:none;transition:opacity 1s}
+  #err{display:none;padding:0 24px;text-align:center;font-size:14px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<header><b>La Grandiella</b><span>Cocina · IGR Hostelería</span></header>
+<div id="hint">Un dedo: girar · Dos dedos: zoom y mover</div>
+<nav id="nav"></nav>
+<div id="load"><div>Cargando la cocina…</div><div id="bar"><i></i></div><div id="err"></div></div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x3b3f45);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.8;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a5a48, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(3, 8, 2); scene.add(sun);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 200);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.minDistance = 0.3; controls.maxDistance = 30;
+
+// Vistas de SketchUp (mm, Z arriba) -> metros, Y arriba
+const v = (x, y, z) => new THREE.Vector3(x / 1000, z / 1000, -y / 1000);
+const VIEWS = [
+  { n: 'Vista general', eye: v(6500, 9500, 5200), tgt: v(4000, 2500, 500), fov: 50 },
+  { n: 'Línea de cocción', eye: v(3300, 4600, 1650), tgt: v(3300, 300, 1050), fov: 60 },
+  { n: 'Lavado y horno', eye: v(5400, 1900, 1650), tgt: v(1200, 5000, 1100), fov: 60 },
+  { n: 'Frío', eye: v(4300, 2600, 1650), tgt: v(8800, 3300, 1100), fov: 60 },
+  { n: 'Planta', eye: v(4525, 2661, 14000), tgt: v(4525, 2660, 0), fov: 40 },
+];
+const nav = document.getElementById('nav');
+let anim = null;
+VIEWS.forEach((vw, i) => {
+  const b = document.createElement('button');
+  b.textContent = vw.n;
+  b.onclick = () => go(i);
+  nav.appendChild(b);
+});
+function go(i, instant) {
+  const vw = VIEWS[i];
+  [...nav.children].forEach((b, j) => b.classList.toggle('on', i === j));
+  // fov vertical de SketchUp; en móvil vertical se abre algo más para que quepa
+  const fov = camera.aspect < 1 ? Math.min(vw.fov * 1.45, 85) : vw.fov;
+  const from = { eye: camera.position.clone(), tgt: controls.target.clone(), fov: camera.fov };
+  if (instant) { camera.position.copy(vw.eye); controls.target.copy(vw.tgt); camera.fov = fov; camera.updateProjectionMatrix(); return; }
+  anim = { t0: performance.now(), from, to: { eye: vw.eye, tgt: vw.tgt, fov } };
+}
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+const bar = document.querySelector('#bar i');
+async function cargar() {
+  // se descarga el modelo, se decodifica y se monta en memoria (sin data: URIs)
+  const r = await fetch('grandiella.json');
+  const total = +r.headers.get('content-length') || 9600000;
+  const reader = r.body.getReader(); const parts = []; let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); got += value.length; bar.style.width = Math.min(95, 100 * got / total) + '%'; }
+  const txt = new TextDecoder().decode(await new Blob(parts).arrayBuffer());
+  const j = JSON.parse(txt);
+  const uri = j.buffers[0].uri; delete j.buffers[0].uri;
+  const bin = Uint8Array.from(atob(uri.slice(uri.indexOf(',') + 1)), ch => ch.charCodeAt(0));
+  const jb = new TextEncoder().encode(JSON.stringify(j));
+  const jl = Math.ceil(jb.length / 4) * 4, bl = Math.ceil(bin.length / 4) * 4;
+  const glb = new Uint8Array(12 + 8 + jl + 8 + bl); const dv = new DataView(glb.buffer);
+  dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, glb.length, true);
+  dv.setUint32(12, jl, true); dv.setUint32(16, 0x4E4F534A, true); glb.fill(0x20, 20, 20 + jl); glb.set(jb, 20);
+  dv.setUint32(20 + jl, bl, true); dv.setUint32(24 + jl, 0x004E4942, true); glb.set(bin, 28 + jl);
+  return new Promise((ok, ko) => new GLTFLoader().parse(glb.buffer, '', ok, ko));
+}
+cargar().then((g) => {
+  scene.add(g.scene);
+  g.scene.traverse(o => {
+    if (o.isMesh && o.material) {
+      const m = o.material;
+      if (m.transmission > 0) { m.transparent = true; m.opacity = 0.35; m.transmission = 0; }
+      // acero inox satinado, sin brillo exagerado
+      const n = m.name || '';
+      if (/inox|metal_corrogated|cepillado/i.test(n)) { m.metalness = 1; m.roughness = /filtros/i.test(n) ? 0.55 : 0.46; }
+      else if (/cromo/i.test(n)) { m.roughness = 0.22; }
+    }
+  });
+  document.getElementById('load').style.display = 'none';
+  go(0, true);
+  dirty = true;
+  setTimeout(() => document.getElementById('hint').style.opacity = 0, 4000);
+}).catch((err) => {
+  console.error(err);
+  const el = document.getElementById('err');
+  el.style.display = 'block';
+  el.textContent = 'No se ha podido cargar el modelo. (' + (err && err.message || err) + ')';
+});
+
+const ease = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+// dibuja solo cuando algo cambia (menos consumo en el móvil)
+let dirty = true, moving = 0;
+controls.addEventListener('change', () => dirty = true);
+addEventListener('resize', () => dirty = true);
+function loop() {
+  requestAnimationFrame(loop);
+  if (anim) {
+    const t = Math.min(1, (performance.now() - anim.t0) / 900), k = ease(t);
+    camera.position.lerpVectors(anim.from.eye, anim.to.eye, k);
+    controls.target.lerpVectors(anim.from.tgt, anim.to.tgt, k);
+    camera.fov = anim.from.fov + (anim.to.fov - anim.from.fov) * k;
+    camera.updateProjectionMatrix();
+    if (t >= 1) anim = null;
+    dirty = true;
+  }
+  controls.update();
+  if (dirty) { renderer.render(scene, camera); dirty = false; }
+}
+loop();
+window.__redraw = () => dirty = true;
+</script>
+</body>
+</html>
